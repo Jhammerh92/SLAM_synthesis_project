@@ -188,8 +188,8 @@ def calculate_internal_distances(points, xy_only=False):
     points_d = copy.deepcopy(points)
     if xy_only: # only consider distnace in x and y, ignoring elevation difference.
         points_d = points_d[:,:2]
-    for i, point in enumerate(points):
-        sq_distances = np.sum((points_d - points_d)**2, axis=1) # keeping them sqaured to avoid root
+    for i, point in enumerate(points_d):
+        sq_distances = np.sum((point - points_d)**2, axis=1) # keeping them sqaured to avoid root
         # sq_distances = np.linalg.norm((point - points),2, axis=1) # the actual distance
         sq_distance_matrix[i,:] = sq_distances
     return sq_distance_matrix

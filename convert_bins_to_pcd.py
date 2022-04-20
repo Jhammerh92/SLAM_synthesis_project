@@ -41,7 +41,7 @@ if not os.path.isdir("pcds"): os.mkdir("pcds") # if pcds is not a dir, create it
 
 
 N = len(bins_ls) - 1 # - 1 because of the folder pcds we just created
-
+print(N)
 print("Starting process")
 for b_n in range(N):
     bin_name = "{:06d}.bin".format(b_n)

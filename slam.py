@@ -63,10 +63,16 @@ class Odometry(object):
         self.orientations = []
         self.lines = []
         self.odometry_LineSet = o3d.geometry.LineSet()
+        self.fig, self.axes = plt.subplots(1,3) 
 
-        self.coordinate_frame = [[0,0,0],[0, 0, 0], [1, 0, 0], [0, 0, 1]]
-        self.coordinate_frame_lines = [[0, 1], [0, 2], [0, 3]]
-        self.coordinate_frame_colors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        self.odometry_plot = self.axes[0].plot(0,0)[0]
+        self.elevationX_plot = self.axes[1].plot(0,0)[0]
+        self.elevationY_plot = self.axes[2].plot(0,0)[0]
+
+        
+        # self.coordinate_frame = [[0,0,0],[0, 0, 0], [1, 0, 0], [0, 0, 1]]
+        # self.coordinate_frame_lines = [[0, 1], [0, 2], [0, 3]]
+        # self.coordinate_frame_colors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 
         
 
@@ -74,7 +80,10 @@ class Odometry(object):
         self.odometry.append(pose)
         self.positions.append(pose[:3,3])
         self.orientations.append(pose[:3,:3])
-        if not init: self.update_lineset()
+        if not init: 
+            self.update_lineset()
+            self.update_plot()
+
 
     def update_lineset(self):
         # pull the the updated positions
@@ -83,8 +92,29 @@ class Odometry(object):
         self.lines = [[i,i+1] for i in range( len(self.odometry_LineSet.points)-1) ]
         # print(self.lines)
         self.odometry_LineSet.lines = o3d.utility.Vector2iVector(self.lines)
+
+
+    def update_plot(self):
+        # print(self.positions)
+        pos = np.asarray(self.positions)
+        # print(pos)
+        self.odometry_plot.set_data(pos[:,0], pos[:,1])
+        self.elevationX_plot.set_data(pos[:,0], pos[:,2])
+        self.elevationY_plot.set_data(pos[:,1], pos[:,2])
+        for ax in self.axes:
+            ax.relim()
+            ax.autoscale_view(True,True,True)
+
+        self.fig.canvas.draw_idle()
+        # self.fig.canvas.draw()
+        plt.pause(0.000001)
+        # self.fig.canvas.show()
+        # self.fig.canvas.flush_events()
+
+
+
     
-    # def new_coordinate_frame(self,odometry):
+    
 
 
 class Loop_Closure(object):
@@ -156,12 +186,16 @@ class PG_SLAM(object):
                                         reference_node=0)
 
 
-    def update(self, pcd):
-        # pcd = pcd.voxel_down_sample(voxel_size=0.2) # downsample the pcd
+    def update(self, pcd, downsample_keyframes=False):
+        self.pcd = pcd
+        self.pcd_ds = pcd.voxel_down_sample(voxel_size=0.5) # downsample the pcd
+        if downsample_keyframes: self.pcd = copy.deepcopy(self.pcd_ds)
+         
+        
 
         # if it is the first pcd, then create the first keyframe and return
         if len(self.keyframes) == 0:
-            self.keyframes.append( Keyframe(0, pcd, np.eye(4), self.cycle, self.pose_graph))
+            self.keyframes.append( Keyframe(0, self.pcd, np.eye(4), self.cycle, self.pose_graph))
             self.Odometry.update_odometry(np.eye(4), init=True)
 
             # self.vis.add_geometry(self.keyframes[-1].slam_transformed_pcd)
@@ -183,15 +217,19 @@ class PG_SLAM(object):
         
 
         # if a new keyframe was added it continues from here to loop closure and optimizing
-        if not self.update_keyframe(pcd):
-            return
+        if self.update_keyframe():
+            self.optimize() # run every keyframe
+            if self.detect_loop_proximity(5): # meters dinstance for loop closure detection
+                self.optimize() # run optimize at loop closure
+                self.update_visual() #else update the last n
+        
 
         # detect loop closure
-        if not self.detect_loop_proximity(pcd, 2): # meters dinstance for loop closure detection
-            return
+        # self.detect_loop_proximity(pcd, 2)
+
         
-        self.update_visual(last_n=20) #else update the last n
-        self.optimize() # run optimize at loop closure
+        # self.optimize() # run optimize at loop closure
+        # self.update_visual() #else update the last n
 
 
 
@@ -238,14 +276,15 @@ class PG_SLAM(object):
             
 
     # determines if keyframe should be added and add the keyframe
-    def update_keyframe(self, pcd):
+    def update_keyframe(self):
+
         keyframe_due = False
         if self.cycle - self.keyframes[-1].frame_idx >= 10 and self.cycle !=0: # if more than 10 frames since the last keyframe, so if cycle - last keyframe id > 0
-            keyframe_due = True
+            keyframe_due = False # set to true if you want to force keyframe every n frame
         self.cycle += 1
 
 
-        reg, reg_information = estimate_p2pl(self.keyframes[-1].pcd, pcd, self.last_transform, return_info=True)
+        reg, reg_information = estimate_p2pl(self.keyframes[-1].pcd, self.pcd_ds, self.last_transform, return_info=True)
         transformation = reg.transformation
 
         # estimate angle and translation of transformation
@@ -269,13 +308,13 @@ class PG_SLAM(object):
         transform_view_point(self.vis, odometry)
 
         # check if new transformation is within some limits of the previous keyframe else update the keyframe
-        if is_valid and not keyframe_due:
+        if is_valid and not keyframe_due and reg.fitness > 0.7:
             self.last_transform = transformation # accept the transformation
             self.prev_translation = translation_of_transform
             return False # False because the keyframe was not updated!
 
         # "else" make a new keyframe and add it to the pose graph using the transformation
-        new_keyframe = Keyframe(len(self.keyframes), pcd, odometry, self.cycle, self.pose_graph)
+        new_keyframe = Keyframe(len(self.keyframes), self.pcd, odometry, self.cycle, self.pose_graph)
         self.keyframes.append(new_keyframe)
         self.pose_graph.nodes.append(self.keyframes[-1].pose_graph_node)
 
@@ -309,9 +348,8 @@ class PG_SLAM(object):
 
 
 
-    def detect_loop_proximity(self, pcd, dist):
+    def detect_loop_proximity(self, dist):
         # proximity detection
-        # FIX to only check distance in x-y and not z?
         closure_added = False
         distances = calculate_internal_distances(np.asarray(self.Odometry.positions), xy_only=True)
         proximity_idx = np.where(distances[-1,:] < dist**2)[0] # within 10 meters i.e. r**2
@@ -325,17 +363,32 @@ class PG_SLAM(object):
         print("loop closure proximity detected")
         for prox_idx in proximity_idx:
             # find index of loop closure target and determine transformation, and add edge with uncertain=True
-            prox_keyframe_idx = keyframe_table[keyframe_table[:,1] == prox_idx, 0] # find a keyframe that mathces the proximate frame
+            prox_keyframe_idx = keyframe_table[keyframe_table[:,1] == prox_idx, 0] # find a keyframe in the table that mathces the proximate frame
             if len(prox_keyframe_idx) == 0:
                 continue
-            current_pcd = self.keyframes[-1].pcd # latest keyframe
+            current_keyframe = self.keyframes[-1] # latest keyframe
+            current_pcd = self.pcd_ds # latest keyframe's pcd, downsampled
+            closure_keyframe = self.keyframes[prox_keyframe_idx[0]] # keyframe of the proximity
             closure_pcd = self.keyframes[prox_keyframe_idx[0]].pcd # keyframe of the proximity
 
-            # reg_prox, reg_information = estimate_p2pl(current_pcd, closure_pcd, return_info=True, use_coarse_estimate=True)
-            reg_prox, reg_information = estimate_p2pl_spin_init(closure_pcd,current_pcd, return_info=True, max_iteration=100)
-            transformation_prox = reg_prox.transformation
-            
+            # get expected tranform between the 2 keyframes as the transformation between the odometry
+            current_odometry = current_keyframe.odometry
+            closure_odometry = closure_keyframe.odometry
+            # init_trans = np.linalg.inv(closure_odometry) @ current_odometry
+            init_trans = np.linalg.inv(current_odometry) @ closure_odometry
+            init_trans[2,3] = 0.0  # ignore distance in z direction
+            print(init_trans)
+            # print(current_odometry)
+            # print(closure_odometry)
 
+
+
+            reg_prox, reg_information = estimate_p2pl(current_pcd, closure_pcd,init_trans=init_trans, return_info=True, use_coarse_estimate=False)
+            # reg_prox, reg_information = estimate_p2pl_spin_init(closure_pcd, current_pcd, return_info=True, max_iteration=100)
+            transformation_prox = reg_prox.transformation
+            print(transformation_prox)
+
+            # draw_registration_result( current_pcd, closure_pcd, init_trans)
             # draw_registration_result( current_pcd, closure_pcd, transformation_prox)
             if reg_prox.fitness > 0.7: # reject loop closure if ICP fitness is less than 0.7
                 closure_added = True
@@ -344,7 +397,8 @@ class PG_SLAM(object):
                                                                                         prox_keyframe_idx,
                                                                                         transformation_prox,
                                                                                         reg_information,
-                                                                                        confidence=reg_prox.fitness,
+                                                                                        # confidence=reg_prox.fitness,
+                                                                                        confidence=1.0,
                                                                                         uncertain=True))
 
                 self.Loop_Closure.update_loop_closure_index([self.keyframes[-1].position, self.keyframes[prox_keyframe_idx[0]].position])
@@ -353,6 +407,7 @@ class PG_SLAM(object):
             
         return closure_added
         #  plot the resgistration to manully validate
+
 
 
     def optimize(self, optimize_all = False):
@@ -386,9 +441,13 @@ class PG_SLAM(object):
                 self.vis.poll_events()
                 self.vis.update_renderer()
 
+
+
+
     def update_keyframe_nodes(self):
         for keyframe in self.keyframes:
             keyframe.pose_graph_node.pose = self.pose_graph.nodes[keyframe.id].pose
+            # keyframe.odometry = np.linalg.inv(self.pose_graph.nodes[keyframe.id].pose)
 
 
 
