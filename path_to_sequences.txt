@@ -1,2 +1,3 @@
 /Users/JHH/KITTI/sequences
+/Volumes/KINGSTON/KITTI/sequences
 /Volumes/HAMMER LAGER 2 TB/KITTI_LiDAR/dataset/sequences
