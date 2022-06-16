@@ -5,6 +5,8 @@ import os
 from progress_bar import *
 
 from load_paths import * # loads paths to data
+from thread_pool_loader import _PointCloudTransmissionFormat
+import concurrent.futures
 
 """ Use this script to convert a KITTI sequence of .bin files to .pcd with estimated normals, to work with in open3d
     call in terminal: 'python3 convert_bins_to_pcd.py -i <inputdir> -o <outputdir>' OR 'python3 convert_bins_to_pcd.py -i <inputdir>'
@@ -34,6 +36,28 @@ def convert_kitti_bin_to_pcd(binFilePath):
     return pcd
 
 
+def convert_kitti_bin_to_pcd_ThreadPool(binFilePath) -> _PointCloudTransmissionFormat:
+    size_float = 4
+    list_pcd = []
+    with open(binFilePath, "rb") as f:
+        byte = f.read(size_float * 4)
+        while byte:
+            x, y, z, intensity = struct.unpack("ffff", byte)
+            list_pcd.append([x, y, z])
+            byte = f.read(size_float * 4)
+    np_pcd = np.asarray(list_pcd)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np_pcd)
+    # estimate normals to better do ICP and 
+    pcd.estimate_normals(
+            search_param = o3d.geometry.KDTreeSearchParamHybrid(radius = 1, max_nn = 100))
+    # normals are expected to point toward the Lidar scanner location. 
+    pcd.orient_normals_towards_camera_location(np.array([0.0,0.0,0.0]))
+
+    return _PointCloudTransmissionFormat(pcd)
+
+
+
 
 
 
@@ -60,9 +84,9 @@ def main(argv):
             sys.exit(2)
         elif opt in ("-i"):
             path_to_bins = r'{}'.format(arg)
-            path_to_pcds = r'{}'.format(arg) # if no out is given, then out is the same as in
+            path_to_pcds =  r'{}'.format(arg) + r'/pcds' # if no out is given, then out is the same as in
         elif opt in ("-o"):
-            path_to_pcds = r'{}'.format(arg)
+            path_to_pcds = r'{}'.format(arg) + r'/pcds'
         elif opt in ("-c"):
             create_out_dir = True
         # else:
@@ -98,37 +122,59 @@ def main(argv):
             raise Exception("outputdir does not exist")
     
 
-    if not os.path.isdir("pcds"): os.mkdir("pcds") # if pcds is not a dir, create it
 
 
+
+    # if not os.path.isdir("pcds"): os.mkdir("pcds") # if pcds is not a dir, create it
     # os.chdir(path_to_bins)
     bins_ls = [file for file in os.listdir(path_to_bins) if file.endswith('.bin')]# list all the bin files
-    N = len(bins_ls) # - 1 because of the folder pcds we just created
+    N = len(bins_ls) 
     if N == 0:
         raise Exception("No .bin files in inputdir")
 
+    # Might need to sort the order??
 
-    print("Files to convert {}".format(N))
-    # print("Starting process")
-    progress_bar(0, N, clear=True)
-    for b_n in range(N):
-        bin_name = "{:06d}.bin".format(b_n)
-        pcd_name = "pcds/{:06d}.pcd".format(b_n)
-        if os.path.isfile(pcd_name):
-            continue
-        # if b_n % 20 == 0: 
-            # perc_done = b_n/N
-            # print("Working on {} of {}. Percent done: {:%}".format(b_n, N, perc_done))
-        try:
-            pcd = convert_kitti_bin_to_pcd(path_to_bins + bin_name)
+
+    bin_paths = [path_to_bins + bin_name for bin_name in bins_ls]
+    pcd_names = [f"{path_to_pcds}/{i:06d}.pcd" for i in range( N )]
+
+    # remove already processed files from the list of files to process
+    bin_paths = [bin_path for (bin_path, pcd_name) in zip(bin_paths, pcd_names) if not os.path.isfile(pcd_name) ]
+    pcd_names = [pcd_name for pcd_name in pcd_names if not os.path.isfile(pcd_name) ]
+
+    # print(pcd_names[0])
+    # print(bin_paths[0])
+
+    # print(f"Files to convert {N}\n")
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        print("doing conversion stuff..")
+        futures = [executor.submit(convert_kitti_bin_to_pcd_ThreadPool, bin_path) for bin_path in bin_paths]
+
+        for i, (future, pcd_name) in enumerate(zip(futures, pcd_names)):
+            progress_bar(i, len(futures))
+            # if os.path.isfile(pcd_name):
+            #     continue
+            pcd = future.result().create_pointcloud()
             o3d.io.write_point_cloud(pcd_name, pcd)
-        except:
-            print("{} does not exist".format(bin_name))
-
-        progress_bar(b_n+1, N)
 
 
-    print("bins have been converted to .pcd in folder {}".format(path_to_pcds))
+    # print("Starting process")
+    # progress_bar(0, N, clear=True)
+    # for b_n in range(N):
+    #     bin_name = "{:06d}.bin".format(b_n)
+    #     pcd_name = "pcds/{:06d}.pcd".format(b_n)
+    #     if os.path.isfile(pcd_name):
+    #         continue
+    #     try:
+    #         pcd = convert_kitti_bin_to_pcd(path_to_bins + bin_name)
+    #         o3d.io.write_point_cloud(pcd_name, pcd)
+    #     except:
+    #         print("{} does not exist".format(bin_name))
+
+
+
+    print("\nbins have been converted to .pcd in folder {}".format(path_to_pcds))
 
 
 

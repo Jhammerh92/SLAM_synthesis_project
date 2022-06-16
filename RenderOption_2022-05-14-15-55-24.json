@@ -1,5 +1,5 @@
 {
-	"background_color" : [ 0.0, 0.0, 0.0 ],
+	"background_color" : [ 1.0, 1.0, 1.0 ],
 	"class_name" : "RenderOption",
 	"default_mesh_color" : [ 0.69999999999999996, 0.69999999999999996, 0.69999999999999996 ],
 	"image_max_depth" : 3000,
@@ -26,7 +26,7 @@
 	"light3_specular_power" : 0.20000000000000001,
 	"light3_specular_shininess" : 100.0,
 	"light_ambient_color" : [ 0.0, 0.0, 0.0 ],
-	"light_on" : true,
+	"light_on" : false,
 	"line_width" : 1.0,
 	"mesh_color_option" : 1,
 	"mesh_shade_option" : 0,
@@ -34,7 +34,7 @@
 	"mesh_show_wireframe" : false,
 	"point_color_option" : 1,
 	"point_show_normal" : false,
-	"point_size" : 1.0,
+	"point_size" : 2.0,
 	"show_coordinate_frame" : false,
 	"version_major" : 1,
 	"version_minor" : 0

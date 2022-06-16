@@ -37,4 +37,5 @@ if __name__ == "__main__":
     # pcd = o3d.io.read_point_cloud(pcd_data.path)
     pcd = o3d.io.read_point_cloud(path_to_pcds + '000000.pcd')
     save_view_point(pcd, "viewpoint.json")
+    print("new view point is saved!")
     # load_view_point(pcd, "viewpoint.json")

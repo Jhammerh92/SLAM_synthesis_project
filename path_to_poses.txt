@@ -1,0 +1,2 @@
+/Users/JHH/KITTI/poses
+/Volumes/HAMMER DATA 2TB/KITTI/poses
