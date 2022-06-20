@@ -27,7 +27,7 @@ from functions import *
 
 
 
-def undistort_pcd(pcd, transformation, pitch_correction_deg=0.0): # omskriv til at bruge en transform matrice
+def undistort_pcd(pcd, transformation, pitch_correction_deg=0.0, roll_correction_deg=0.0): # omskriv til at bruge en transform matrice
     """
     Script that handles the undistortion of lidar scan taken while moving
     at high relative velocity, compared to the frequency of the scanning.
@@ -36,16 +36,20 @@ def undistort_pcd(pcd, transformation, pitch_correction_deg=0.0): # omskriv til 
     "Increased Accuracy For Fast Moving LiDARS: Correction of Distorted Point Clouds"
     - Tobias Renzler, Michael Stolz, Markus Schratter
 
-    with and addition for a pitched lidar, and rotating multiple points fast, using complex vectors.
+    with and addition for a pitched lidar, and rotating multiple points fast, using complex numbers.
 
     Written by Jakob Hammer Hedemann
     """
     undistorted_pcd = copy.deepcopy(pcd)
-    delta_time = 1.0# 0.915520-0.714907 # time stamps of the files, GET THEM FROM THE FILES
+    delta_time = 1.0 # this should removed or keep it in to account for velocity in the future?
     # speed = translation/delta_time
     # velocity = transformation[:3,3]
-    elevation_correction_angle = np.deg2rad(pitch_correction_deg) #  np.divide( velocity[2] , velocity[1] , out = np.zeros(1), where=abs(velocity[2]) > 0)
+    elevation_correction_angle = np.deg2rad(pitch_correction_deg)
+    pose_correction_matrix = Rotation.from_euler('XZY', [-pitch_correction_deg, 0.0, -roll_correction_deg], degrees=True).as_matrix()#  np.divide( velocity[2] , velocity[1] , out = np.zeros(1), where=abs(velocity[2]) > 0)
     speed = translation_dist_of_transform(transformation, timestep=delta_time)
+    v_norm = (transformation[:3,3])/speed if speed > 0.0 else np.zeros((3,))
+    # v_norm = np.round(np.zeros_like(v_norm) +  1.0 * (np.max(np.abs(v_norm)) == np.abs(v_norm)) / v_norm[np.max(np.abs(v_norm)) == np.abs(v_norm)] )
+    # v_norm = pose_correction_matrix @ v_norm
     omega = angular_rotation_of_transform(transformation, timestep=delta_time, axis='z')
 
     points = np.asarray(pcd.points)
@@ -57,17 +61,19 @@ def undistort_pcd(pcd, transformation, pitch_correction_deg=0.0): # omskriv til 
     delta = (correction_term * omega * delta_time)/2
     # adjust distance to make the movement more correrct by calculating it as the arc length
     arc_term = np.divide(abs(np.sin(delta)) , abs(delta),out=np.ones_like(delta), where=abs(delta)>0.0 )
-    s = ( -correction_term )* speed * delta_time * arc_term # the negative "velocity vector"
-    s_mat = np.zeros_like(points)
-    s_mat[:,1] = np.cos(elevation_correction_angle) * s.ravel()
-    elevation_correction =  np.sin(elevation_correction_angle) * s.ravel() * correction_term.ravel()
+    s = -correction_term * speed * delta_time * arc_term # the negative "velocity vector"
+    # s_mat = np.zeros_like(points)
+    s_mat = s * v_norm
 
-    active_rot_points = rotate_points_3D(s_mat, -delta)
+    # s_mat[:,1] = np.cos(elevation_correction_angle) * s.ravel()
+    # elevation_correction =  np.sin(elevation_correction_angle) * s.ravel() * correction_term.ravel()
+
+    active_rot_points = rotate_points_3D(s_mat, -delta) # these are only rotations about z
     passive_rot_points = rotate_points_3D(points, 2*delta)
     
 
     undistorted_points = active_rot_points + passive_rot_points 
-    undistorted_points[:,2] += elevation_correction 
+    # undistorted_points[:,2] += elevation_correction 
     undistorted_pcd.points = o3d.utility.Vector3dVector(undistorted_points)
 
     return undistorted_pcd
@@ -92,7 +98,7 @@ if __name__ == "__main__":
     idx = 2000
     pcd1 = load_pcd_from_index(idx, PATH_TO_PCDS)#.transform(CALIB_LIDAR_POSE)
     pcd2 = load_pcd_from_index(idx + 1, PATH_TO_PCDS)#.transform(CALIB_LIDAR_POSE)
-    reg = estimate_p2pl(pcd1.voxel_down_sample(0.5), pcd2.voxel_down_sample(0.5), use_coarse_estimate=True)
+    reg = estimate_p2pl(pcd2.voxel_down_sample(0.5), pcd1.voxel_down_sample(0.5), use_coarse_estimate=True)
     translation = translation_dist_of_transform(reg.transformation)
     delta_time = 0.20 # 0.915520-0.714907 # time stamps of the files
     speed = translation/delta_time
@@ -102,11 +108,11 @@ if __name__ == "__main__":
     print(f"Omega is: {omega:.2f}")
 
     print(reg.transformation[:3,3])
-    undistorted_pcd = undistort_pcd(pcd1, reg.transformation, pitch_correction_deg=2.0)
+    undistorted_pcd = undistort_pcd(pcd2, reg.transformation, pitch_correction_deg=2.0).transform(CALIB_LIDAR_POSE)
 
-    ds = 0.01
-    points = copy.deepcopy(pcd1.voxel_down_sample(ds))
-    corrected_points = copy.deepcopy(pcd1.voxel_down_sample(ds))
+    ds = 0.001
+    points = copy.deepcopy(pcd2.voxel_down_sample(ds)).transform(CALIB_LIDAR_POSE)
+    corrected_points = copy.deepcopy(pcd2.voxel_down_sample(ds))
     point = points.select_by_index([0]).paint_uniform_color([1.0,0.0,0.0])
 
     # to seperate old from new by 1 cm 
@@ -116,44 +122,45 @@ if __name__ == "__main__":
     vis = o3d.visualization.Visualizer()
     vis.create_window()
     vis.get_render_option().load_from_json(path_to_cwd + 'render_options_vis.json')
-    vis.add_geometry(pcd1.transform(adjust).voxel_down_sample(ds).paint_uniform_color([0.0,0.0,1.0]))
+    vis.add_geometry(pcd2.transform(CALIB_LIDAR_POSE).transform(adjust).voxel_down_sample(ds).paint_uniform_color([0.0,0.0,1.0]))
     vis.add_geometry(undistorted_pcd.transform(adjust).voxel_down_sample(ds).paint_uniform_color([0.0,1.0,0.0]))
     # vis.add_geometry(pcd1)
     # vis.add_geometry(point)
-    vis.add_geometry(corrected_points)
+    # vis.add_geometry(corrected_points)
 
 
 
 
     corrected_points_list = []
     for i in range(0, len(points.points)):
-        point.points = points.select_by_index(range(0,i+1)).points
+        # point.points = points.select_by_index(range(0,i+1)).points
 
 
-        pos = np.asarray(point.points)
-        # get the azimuth of the points
-        azimuth = np.arctan2(pos[i,0], pos[i,1]) if pos[i,0] >= 0 else np.arctan2(pos[i,0], pos[i,1]) + 2 * np.pi
-        #correction term from azimuth
-        correction_term = 1 - (azimuth/(2*np.pi))
-        # need to make sure delta is correct
-        delta = (correction_term * omega * delta_time)/2
-        # adjust distance to make the movement more correrct by calculating it as the arc length
-        arc_term = abs(np.sin(delta)) / abs(delta)
-        s = np.array([[0.0,1.0,0.0]]) *( -correction_term )* speed * delta_time * arc_term
-        active_rot_matrix = Rotation.from_rotvec(-delta*np.array([0.0,0.0,1.0])).as_matrix() @ s.T
-        passive_rot_matrix = Rotation.from_rotvec(2*delta*np.array([0.0,0.0,1.0])).as_matrix()
+        # pos = np.asarray(point.points)
+        # # get the azimuth of the points
+        # azimuth = np.arctan2(pos[i,0], pos[i,1]) if pos[i,0] >= 0 else np.arctan2(pos[i,0], pos[i,1]) + 2 * np.pi
+        # #correction term from azimuth
+        # correction_term = 1 - (azimuth/(2*np.pi))
+        # # need to make sure delta is correct
+        # delta = (correction_term * omega * delta_time)/2
+        # # adjust distance to make the movement more correrct by calculating it as the arc length
+        # arc_term = abs(np.sin(delta)) / abs(delta)
+        # s = np.array([[0.0,1.0,0.0]]) *( -correction_term )* speed * delta_time * arc_term
+        # active_rot_matrix = Rotation.from_rotvec(-delta*np.array([0.0,0.0,1.0])).as_matrix() @ s.T
+        # passive_rot_matrix = Rotation.from_rotvec(2*delta*np.array([0.0,0.0,1.0])).as_matrix()
 
-        this_point = np.asarray(points.select_by_index([i]).points)
-        corrected_point = active_rot_matrix + passive_rot_matrix @ this_point.T
-        corrected_points_list.append(corrected_point.T.flatten())
-        corrected_points_np = np.asarray(corrected_points_list)
-        corrected_points.points = o3d.utility.Vector3dVector(corrected_points_np)
+        # this_point = np.asarray(points.select_by_index([i]).points)
+        # corrected_point = active_rot_matrix + passive_rot_matrix @ this_point.T
+        # corrected_points_list.append(corrected_point.T.flatten())
+        # corrected_points_np = np.asarray(corrected_points_list)
+        # corrected_points.points = o3d.utility.Vector3dVector(corrected_points_np)
 
-        print(f" Dot #{i},\t\t azimuth {np.rad2deg(azimuth):>5.2f},\t correction term: {correction_term:.2f},\t delta={delta:.5f}", end='\r')
+        # print(f" Dot #{i},\t\t azimuth {np.rad2deg(azimuth):>5.2f},\t correction term: {correction_term:.2f},\t delta={delta:.5f}", end='\r')
 
 
         vis.update_geometry(corrected_points.paint_uniform_color([1.0,0.0,0.0]))
-        vis.poll_events()
+        if not vis.poll_events():
+            break
         vis.update_renderer()
     
     vis.run()

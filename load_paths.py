@@ -28,6 +28,12 @@ def listdirs(folder):
     # dirs.sort(key=lambda x: "{}".format(int(x.replace('_',''))))
     return dirs
 
+def listfiles(folder, ending=''):
+    files = [file for file in os.listdir(folder) if file.endswith(ending)]
+    # fls = [f for f in os.listdir(folder) if not (os.path.isdir(os.path.join(folder, f)))]
+    # dirs.sort(key=lambda x: "{}".format(int(x.replace('_',''))))
+    return files
+
 
 # def set_paths_to_data_from(data_set, seq):
 paths_to_datasets = get_paths_from_txt(os.getcwd() + r'/path_to_sequences.txt')

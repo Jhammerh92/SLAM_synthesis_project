@@ -55,8 +55,10 @@ def main():
     for i, pcds in enumerate(PCDLoader.iterative_loader()): # returns both full and downsampled pcd in 'pcds'
         # if i == 1557-1300:
         #     print('FAULT if these been a loop closure added before this point')
-        SLAM.update(*pcds, gps_position=None, use_downsampled=True, downsample_keyframes=True)
-
+        if SLAM.update(*pcds, gps_position=None, use_downsampled=True, downsample_keyframes=True):
+            PCDLoader.shutdown()
+            break
+    
     SLAM.finalize() #finalize function .. push last keyframe, optimize,update vis .. etc.
     t_end = time.perf_counter()
 
@@ -79,18 +81,26 @@ def main():
 
     slam_map = SLAM.generate_map()
 
-
-    to_be_saved = {"SLAM_map": slam_map,
+    # put into a SLAM.get_data() + SLAM.save_data()
+    loam_data = {
                     "odometry": SLAM.get_odometry(),
                     "non_opt_odometry":SLAM.get_odometry_non_opt(),
                     "poses": SLAM.get_poses(),
                     "keyframe_poses": SLAM.get_keyframe_poses(),
-                    'timestamps': SLAM.get_timestamps()
+                    'timestamps': SLAM.get_timestamps(),
+                    "process_times": SLAM.get_process_times(),
+                    "icp_times": SLAM.get_icp_times(),
+                    "fitnesses": SLAM.get_fitnesses(),
+                    "inlier_rmses": SLAM.get_inlier_rmses(),
+                    "SLAM_map": slam_map
                   }
 
-    save_processed_data(SLAM,**to_be_saved)
+    save_processed_data(SLAM,**loam_data)
 
+    
 
+    print('\nvisualizer is active..')    
+    SLAM.vis.run()
     # draw_pcd(slam_map)
 
 

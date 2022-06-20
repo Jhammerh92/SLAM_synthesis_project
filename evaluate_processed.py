@@ -6,7 +6,7 @@ from sklearn.neighbors import NearestNeighbors
 import pandas as pd
 import pickle
 # import copy
-# import os
+import os
 # import sys
 # import pyquaternion
 # import time
@@ -19,6 +19,7 @@ import pickle
 # from functions import *
 import plotting
 from load_paths import * # loads paths to data
+from functions import *
 
 
 # def plot_odometry(odometry):
@@ -27,16 +28,34 @@ from load_paths import * # loads paths to data
 #     ax[1].plot(odometry[:,0], odometry[:,2])
 def get_processed_folder(run):
     folders = listdirs(PATH_TO_PROCESSED)
+    if run == -1 : return folders[-1]
     for f in folders:
-        if int(f.split('_')[-1]) == run:
+        if int(f.split('_')[-1]) == run and os.path.isdir(os.path.join(PATH_TO_PROCESSED, f)):
             return f
-    print(f'no run with index {run}')
+    Exception(print(f'no run with index {run}'))
+    
 
 def load_processed_odometry(run):
     folder = get_processed_folder(run)
     return np.load(f'{PATH_TO_PROCESSED}/{folder}/odometry.npy')
 
-def load_odometry_and_orientation(run):
+def load_data(run):
+    folder = get_processed_folder(run)
+    path = f'{PATH_TO_PROCESSED}/{folder}/'
+    files = listfiles(path, ending='.npy')
+    for f in files:
+        # try:
+        varname = f.split('.')[0]
+        var = np.load(os.path.join(path,f))
+        cm = f'globals() [varname]' + " = var"
+        exec(cm)
+        print(f'loaded {varname}')
+        # except:
+            # print('Could not load: {f}')
+    return
+
+
+def load_odometry_and_orientation(run, crop =[0,-1]):
     folder = get_processed_folder(run)
     # try:
     pose_data_file = open(f'{PATH_TO_PROCESSED}/{folder}/poses.txt','r')
@@ -54,7 +73,11 @@ def load_odometry_and_orientation(run):
         position.append([pos[0], pos[1], pos[2]])
         orientation.append(orien)
     pose_data_file.close()
-    return np.asarray(position), np.asarray(orientation)
+
+    position = np.asarray(position)[crop[0]:crop[1]]
+    orientation = np.asarray(orientation)[crop[0]:crop[1]]
+
+    return position, orientation
 
 def load_processed_map(run):
     folder = get_processed_folder(run)
@@ -161,6 +184,17 @@ def calc_L2(residual):
     return L2
 
 def calc_delta_R(R_truth, R_aligned):
+    # kitti_rot_mat = np.array([[0,-1,0],[0,0,-1],[1,0,0]]).T
+    # # kitti_rot_mat = np.array([[1,0,0],[0,0,-1],[1,0,0]])
+    # print(kitti_rot_mat.T)
+    # kitti_rot_mat = np.array([0.0139567999999999,4 -0.0051327600000000044, 0.9998769999999992, 0.6594892526583304, -0.9997759999999967, 0.015076499999999996, 0.014020699999999933, -0.044262327033722786, -0.015134699999999947, -0.9998609999999999, -0.004909509999999997, -0.6097703961060831 ])
+    # kitti_rot_mat = kitti_rot_mat.reshape((3,4))[:3,:3]
+    # print(kitti_rot_mat)
+    # # R_truth =  R_truth
+    # R_aligned = Rotation.from_matrix(R_aligned).as_euler('yzx')
+    # R_aligned = Rotation.from_euler('zyx', R_aligned).as_matrix()
+    # delta_R = (R_truth @ R_aligned.transpose([0,2,1])) @ kitti_rot_mat
+
     kitti_rot_mat = np.array([[0,-1,0],[0,0,-1],[-1,0,0]])
     R_truth_euler = (kitti_rot_mat @ Rotation.from_matrix(R_truth).as_euler('yzx', degrees=False).T).T
     R_aligned_euler = Rotation.from_matrix(R_aligned).as_euler('xyz', degrees=False)
@@ -238,10 +272,10 @@ def calc_motion_parameters(odometry):
 
     return cumulative_step_length, travelled_distance, travelled_distance_xyz
 
-def calc_relative_error(odometry, R_aligned, odometry_truth, R_truth, dist=[10]):
+def calc_relative_error(odometry, R, odometry_truth, R_truth, dist=[10]):
     if not isinstance(dist, list):
         dist = [dist]
-    delta_R = calc_delta_R(R_truth, R_aligned)
+    delta_R = calc_delta_R(R, R_truth)
     cum_length = calc_motion_parameters(odometry)[0]
     RE = dict(delta_p=[], delta_phi=[], segment_length=[])
     for d in dist:
@@ -261,16 +295,31 @@ def calc_relative_error(odometry, R_aligned, odometry_truth, R_truth, dist=[10])
             d_ = [odometry[_s], odometry[_e]]
             d_truth = [odometry_truth[_s], odometry_truth[_e]]
             # alignment_params = estimate_alignment(d[0],d_truth[0])
-            aligned_d = align_odometry(np.asarray(d_), s_p=1, R_p=delta_R[_s],t_p=np.array( d_truth[0] - delta_R[_s]@d_[0],ndmin=2).T)
+            R_p = delta_R[_s] # should be R0 R^0^T
+            t_p = np.array( d_truth[0] - delta_R[_s]@d_[0],ndmin=2).T
+            aligned_d = align_odometry(np.asarray(d_), s_p=1, R_p=R_p, t_p=t_p)
             test = aligned_d - d_truth
-            d_R_k = (R_aligned[_s].T @ R_aligned[_e]).T @ R_truth[_s].T @ R_truth[_e]
-            d_phi = np.linalg.norm(Rotation.from_matrix(d_R_k).as_rotvec(degrees=True))
+
+            # this is what the paper says            
             # d_phi = np.linalg.norm(Rotation.from_matrix(delta_R[_e]).as_rotvec(degrees=True))
             # error_aligned_d = (np.array(d_truth).T - delta_R[_e] @ np.array(aligned_d).T).T
-            error_aligned_d = (d_R_k @ np.array(aligned_d).T).T 
-            error_aligned_d_old = (delta_R[_e] @ np.array(aligned_d).T).T 
+
+            #this is my change
+            # R_d = calc_delta_R(R[_s], R[_s])
+            # R_d_truth = calc_delta_R(R_truth[_s], R_truth[_e])
+            # d_R_k = R_d.T @ R_d_truth
+
+            d_R_k = calc_delta_R((R[_s].T @ R[_e]) , R_truth[_s].T @ R_truth[_e])
+            # d_R_k = (R[_s].T @ R[_e]).T @ R_truth[_s].T @ R_truth[_e]
+            d_phi = np.linalg.norm(Rotation.from_matrix(d_R_k).as_rotvec(degrees=True))
+            error_aligned_d = (d_R_k @ np.array(aligned_d).T).T
+
+            # error_aligned_d = d_R_k@aligned_d
+            # error_aligned_d = (delta_R[_e] @ np.array(aligned_d).T).T 
             error_aligned_d = error_aligned_d - (error_aligned_d[0,:] - d_truth[0] )
             d_p = np.linalg.norm(d_truth[1] - error_aligned_d[1,:])
+
+
             # d_p_test = np.linalg.norm(d_truth[-1] - delta_R[_e].T @ aligned_d[-1])
             # plt.clf()
             # plot_segment(d_,label='d_', c='C0')
@@ -320,7 +369,7 @@ def plot_relative_error(RE, odometry):
     ax2.set_xticklabels(RE['segment_length'])
     ax2.set_xlabel('Segment Distance [m]')
 
-    fig2.suptitle(f'Relative Error of {DATA_SET_LABEL}, Loop Closure: {USE_LOOP_CLOSURE}')
+    fig2.suptitle(f"Relative Error of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")
     #plot statistical  box-plot ish
     # odometry colored with the error to see where the error low and high
 
@@ -331,6 +380,11 @@ def plot_relative_error(RE, odometry):
     
     return
 
+def my_boxplot(ax, data, index=0, c='C0'):
+    data_list = [data if i==index else np.array([np.nan]) for i in range(index+1)]
+
+    ax.scatter(np.random.normal(index+1, 0.05, len(data)), data, marker='.', s=0.5, alpha=0.5, c=c)
+    ax.boxplot(data_list, showfliers = False)
 
 
 def evaluate_odometry_to_ground_thruth(odometry, orientations, truth_odometry, truth_orientations, alignment=True):
@@ -374,17 +428,18 @@ def evaluate_odometry_to_ground_thruth(odometry, orientations, truth_odometry, t
     labels = ['x','y','z', 'norm']
     df = pd.DataFrame({
                        'ATE pos [m]':ATE_pos,
-                       'ATE rot [deg]':ATE_rot,
+                       '- rot [deg]':ATE_rot,
                     #    'ATE pos (yaw) [m]': ate_yaw_pos,
                     #    'ATE rot (yaw) [m]': ate_yaw_rot,
                        'L2 [m]': L2,
-                       'RMSE [m]':rmse, 
-                       'endpoint dev. [m]': end_point_dev,
-                       'endpoint rel. dev. [%]': end_point_relative_dev,
-                       'total distance [m]':travelled_distance_xyz_norm
+                       'RMSE [m]':rmse,
+                       'EP dev. [m]': end_point_dev,
+                       '- rel. dev.[\%]': end_point_relative_dev,
+                       'Total dist. [m]':travelled_distance_xyz_norm
                        }, 
                         index=labels)
     print(df)
+    
 
     plot_relative_error(RE, aligned_odometry)
     
@@ -426,43 +481,126 @@ def evaluate_odometry_to_ground_thruth(odometry, orientations, truth_odometry, t
     # plotting.plot_odometry_2D(yaw_aligned_odometry, label='Yaw Aligned Odometry', axes=axes)
     fig.suptitle(f'{DATA_SET_LABEL} - Sequence {SEQ_LABEL}')
 
-def get_closest_truth_value(odometry, truth, truth_orientations):
-    neigh = NearestNeighbors(n_neighbors=10, radius=50)
-    neigh.fit(truth)
-    closest_thruth_idx = neigh.kneighbors(odometry, return_distance=False)
-    closest_thruth_idx = np.min(closest_thruth_idx, axis=1)
-    reduced_truth = truth[closest_thruth_idx,:].reshape((-1,3))
-    reduced_truth_orientations = truth_orientations[closest_thruth_idx,:]
-    return reduced_truth, reduced_truth_orientations
+    return df
+
+def dataframe_to_latex(df, **kwargs):
+    print('\n--------------LATEX----------------')
+   
+    print(df.style.format(precision=3).to_latex(**kwargs) )
+    print('--------------LATEX-end------------\n')
+
+# def get_knn_truth_value(odometry, truth, truth_orientations):
+#     neigh = NearestNeighbors(n_neighbors=10, radius=50)
+#     neigh.fit(truth)
+#     closest_thruth_idx = neigh.kneighbors(odometry, return_distance=False)
+#     closest_thruth_idx = np.min(closest_thruth_idx, axis=1)
+#     reduced_truth = truth[closest_thruth_idx,:].reshape((-1,3))
+#     reduced_truth_orientations = truth_orientations[closest_thruth_idx,:]
+#     return reduced_truth, reduced_truth_orientations
 
 
 if __name__ == "__main__":
-    RUN = 13
-
-    # odometry = np.load(r'/Volumes/HAMMER DATA 2TB/DTU_LIDAR_20220523/20220523_122236/processed_data/20220523_122236_run_001/odometry.npy')
-    load_settings(RUN)
-    odometry = load_odometry_and_orientation(RUN)
-    if path_to_pose_txt.split('.')[-1] == 'csv':
-        n = len(odometry[0])
-        ground_truth = plotting.get_pose_ground_truth_DTU(path_to_pose_txt, n=n)
-
-    else:
-        ground_truth = plotting.get_pose_ground_truth_KITTI(path_to_pose_txt)
+    plt.rcParams["figure.figsize"] = (12,10)
+    print('\n\n\n-------------START--------------')
+    RUNS = [2]
+    #fig2.suptitle(f"Relative Error of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")   
+    types = ['LC', 'LM-ICP', 'Raw']
+    aligned = [True, False, False]
 
 
 
-    # _,axes = plotting.plot_odometry_2D(ground_truth[0], marker='.', label='Ground Truth')
-    # plotting.plot_odometry_2D(odometry[0],axes=axes, marker='.')
+    fig_fits, ax_fits = plt.subplots(1, 2)
+
+    fig_inlier, ax_inlier = plt.subplots(1)
+    
+    fig_ICP, ax_ICP = plt.subplots(1)
 
 
-    evaluate_odometry_to_ground_thruth(*odometry, *ground_truth, alignment=False)
+    for r, RUN in enumerate(RUNS):
+        if RUN is None:
+            continue
+        print(f'-------run: {RUN} -------')
+        # odometry = np.load(r'/Volumes/HAMMER DATA 2TB/DTU_LIDAR_20220523/20220523_122236/processed_data/20220523_122236_run_001/odometry.npy')
+        settings  = load_settings(RUN)
+        load_data(RUN) # this also load odometry
+        if DATA_SET_LABEL == 'DTU':
+            if SEQ == 1:
+                crop = [0,-50]
+                first_index = 101 
+                heading_correction = -151.2 # -150.75 Alignment should find this angle.
+            if SEQ == 2:
+                crop = [5,-35]
+                first_index = 0
+                heading_correction = 33.02
+            odometry_and_orientations = load_odometry_and_orientation(RUN, crop=crop)
+            odometry_and_orientations
+            n = odometry_and_orientations[0].shape[0]
+            ground_truth_odometry_and_orientations = plotting.get_pose_ground_truth_DTU(path_to_pose_txt, heading_correction=heading_correction)
+            ground_truth_odometry_and_orientations = plotting.get_shifted_ground_truth(*ground_truth_odometry_and_orientations, n, first_index=first_index)
 
+        elif DATA_SET_LABEL == 'KITTI':
+            odometry_and_orientations = load_odometry_and_orientation(RUN)
+            ground_truth_odometry_and_orientations = plotting.get_pose_ground_truth_KITTI(path_to_pose_txt)
+            if odometry_and_orientations[0].shape[0] == ground_truth_odometry_and_orientations[0].shape[0] -1:
+                odo, rot = ground_truth_odometry_and_orientations
+                odo = odo[:-1,:]
+                rot = rot[:-1,:]
+                ground_truth_odometry_and_orientations = (odo,rot)
+
+
+        # _,axes = plotting.plot_odometry_2D(ground_truth[0], marker='.', label='Ground Truth')
+        # plotting.plot_odometry_2D(odometry[0],axes=axes, marker='.')
+
+        lw = 0.7
+        try:
+            ax_fits[0].plot(fitnesses,lw=lw)
+            my_boxplot(ax_fits[1], fitnesses, index=r)
+        except:
+            pass
+        try:
+            ax_inlier.plot(inlier_rmses,lw=lw)
+        except:
+            pass
+        try:
+            ax_ICP.plot(icp_times, color=f'C{r}',lw=lw)
+            ax_ICP.plot(process_times, color=f'C{r}',lw=lw)
+        except:
+            pass
+            # print('no fitness or rmse recorded')
+
+
+        eval_data = evaluate_odometry_to_ground_thruth(*odometry_and_orientations, *ground_truth_odometry_and_orientations, alignment=aligned[r])
+        eval_data_latex_settings = dict(
+                position='H',
+                hrules=True, 
+                label=f"table:{settings['value']['label']}_{types[r]}", 
+                caption=f"Processed Values for {settings['value']['label'].replace('_', ' ')} - {types[r]}")
+        
+        dataframe_to_latex(eval_data, **eval_data_latex_settings)
+
+
+
+
+
+
+
+    # if len(RUNS) == 1:
+    #     slam_map = load_processed_map(RUN).voxel_down_sample(1.0)
+    #     draw_pcd([slam_map])
+
+    fig_fits.suptitle(f"Fitness, {settings['value']['label']} - Local map ICP: {settings['value']['local map ICP']}")
+    ax_fits[0].legend(types)
+
+    fig_inlier.suptitle(f"Inlier RMSE, {settings['value']['label']} - Local map ICP: {settings['value']['local map ICP']}")
+    ax_inlier.legend(types)
+
+    fig_ICP.suptitle(f"ICP times, {settings['value']['label']}")
+    ax_ICP.legend(types)
 
 
     plt.show()
 
 
-    # slam_map = load_processed_map(0)#.voxel_down_sample(0.5)
     # vis = o3d.visualization.Visualizer()
     # vis.create_window()
     # vis.get_render_option().load_from_json(path_to_cwd + 'render_options_vis.json')

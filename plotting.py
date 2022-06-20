@@ -30,31 +30,31 @@ def get_pose_ground_truth_KITTI(file_path):
     pose_data_file.close()
     return np.asarray(position), np.asarray(orientation)
 
+
+def get_shifted_ground_truth(position, orientation,n, first_index=0,):
+    # N = len(position)
+    # first_index = int(round(N - 2*n ))
+    orientation = orientation[first_index::2,:]
+    orientation = orientation[:n,:]
+
+    position = position[first_index::2,:3] - position[first_index,:]
+    # position = position[::2,:]
+    position = position[:n,:]
+    return position, orientation
+
     
-def get_pose_ground_truth_DTU(file_path, n):
+def get_pose_ground_truth_DTU(file_path, heading_correction=0.0):
     # pose_data_file = open(file_path,'r')
     pose_data = np.genfromtxt(file_path, skip_header=25, skip_footer=4, usecols=range(2,8), dtype=np.float64)
-    N = len(pose_data)
-    first_index = int(round(N - 2*n ))
-    heading_correction = -150.75
+
+    # heading_correction = -150.75 # seq DTU 01= -150.75
     init_heading = pose_data[0,3]
     heading_correction_transformation = Rotation.from_euler('zyx', np.array([init_heading, 0.0, 0.0]), degrees=True).as_matrix()
     correction_transformation = Rotation.from_euler('zyx', np.array([heading_correction, 0.0, 0.0]), degrees=True).as_matrix()
-    position = pose_data[first_index:,:3] - pose_data[first_index,:3]
+    position = pose_data[:,:3]
     position = (correction_transformation @ heading_correction_transformation.T @ (position).T).T
-    orientation = Rotation.from_euler('zyx', pose_data[first_index:,3:] - np.array([init_heading, 0.0, 0.0]), degrees=True).as_matrix()
+    orientation = Rotation.from_euler('yzx', pose_data[:,3:] - np.array([init_heading, 0.0, 0.0]), degrees=True).as_matrix()
 
-    position = position[::2,:]
-    orientation = orientation[::2,:]
-    
-    # for pose in pose_data:
-    #     # pose_matrix = np.array([float(s) for s in  str.split(pose)])
-    #     # pose_matrix = pose_matrix.reshape((3,4))
-    #     # orien = pose_matrix[:3,:3] 
-    #     pos = pose[:3] - pose_data[0,:3]
-    #     position.append(pos)#([pos[2], -pos[0], -pos[1]])
-    #     orientation.append(orien)
-    # pose_data_file.close()
     return np.asarray(position), np.asarray(orientation)
 
 

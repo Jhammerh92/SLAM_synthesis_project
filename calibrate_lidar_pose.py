@@ -26,11 +26,12 @@ z_rot_mat = o3d.geometry.get_rotation_matrix_from_axis_angle(np.array([0.0,0.0,1
 # z_rot_bias[:3,:3] = z_rot_mat
 
 calib_frame = load_pcd_from_index(100, path = path, is_downsampled=False, voxel_size=0.1).rotate(z_rot_mat)
+draw_pcd([calib_frame])
 
 calib_frame_crop = crop_pcd(calib_frame,z=(-4,-1))
 
 
-plane_model, inliers = calib_frame_crop.segment_plane(distance_threshold=0.05,
+plane_model, inliers = calib_frame_crop.segment_plane(distance_threshold=0.1,
                                          ransac_n=3,
                                          num_iterations=1000)
 extracted_plane = calib_frame_crop.select_by_index(inliers)
@@ -67,19 +68,23 @@ calib_fin.estimate_normals(
 
 init_trans = np.eye(4)
 init_trans[2, 3] = plane_model[3] # adjust the plane height of the init transform
-extracted_plane.transform(init_trans)
-reg_cal = estimate_p2pl(extracted_plane, calib_plane, init_trans=np.eye(4))
+extracted_plane_zeroed = copy.deepcopy(extracted_plane).transform(init_trans)
+reg_cal = estimate_p2pl(extracted_plane_zeroed, calib_plane, init_trans=np.eye(4))
 
 calib_transform = copy.deepcopy(reg_cal.transformation)
 
 theta_z = np.arctan2(calib_transform[1,0], calib_transform[0,0])
 print(f"rotation about the z-axis {np.rad2deg(theta_z)}")
 
+draw_pcd([calib_frame.paint_uniform_color([0.0, 1.0, 0.0]), extracted_plane.paint_uniform_color([1.0, 0.0, 0.0])])
+
+
 transformed_calib_frame = copy.deepcopy(calib_frame) 
 transformed_calib_frame.transform(calib_transform) 
 transformed_calib_frame += calib_fin
 
-transformed_extracted_plane = copy.deepcopy(extracted_plane).transform(calib_transform) 
+transformed_extracted_plane = copy.deepcopy(extracted_plane_zeroed).transform(calib_transform) 
+
 
 
 vis = o3d.visualization.Visualizer()
@@ -89,8 +94,10 @@ vis.create_window()
 vis.add_geometry(transformed_extracted_plane.paint_uniform_color([0.0, 1.0, 0.0]))
 vis.add_geometry(calib_plane.paint_uniform_color([0.0, 0.0, 1.0]))
 # vis.add_geometry(calib_frame.paint_uniform_color([0.0, 0.0, 1.0]))
-vis.add_geometry(extracted_plane.paint_uniform_color([1.0, 0.0, 0.0]))
+vis.add_geometry(extracted_plane_zeroed.paint_uniform_color([1.0, 0.0, 0.0]))
 vis.run()
+
+np.set_printoptions(precision=4, suppress=True)
 
 lidar_height = calib_transform[2, 3]
 lidar_height2 = plane_model[3]
@@ -98,11 +105,13 @@ print(lidar_height, lidar_height2)
 lidar_pose = calib_transform
 # print(calib_transform)
 print(lidar_pose)
+euler_ang_lidar = Rotation.from_matrix(lidar_pose[:3,:3]).as_euler('xyz', degrees=True)
+print('Eulers angles of lidar "xyz": Pitch: {}, Roll: {}, Yaw: {}'.format(*euler_ang_lidar))
 
 
 # should the translation also be included?
 if input("Save calibration?:  ").lower() == "y":
-    np.savetxt('lidar_pose_20220523_alt90.txt', lidar_pose)
-    np.savetxt('lidar_height_20220523_alt90.txt', np.array([lidar_height2]))
+    np.savetxt('lidar_pose_20220523.txt', lidar_pose)
+    np.savetxt('lidar_height_20220523.txt', np.array([lidar_height2]))
     print("Saved!")
 

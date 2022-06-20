@@ -162,7 +162,10 @@ def estimate_p2pl(source, target, init_trans=None, threshold=0.5, use_coarse_est
         init_trans = coarse_reg.transformation
 
     reg_p2p = o3d.pipelines.registration.registration_icp(source, target, threshold, init_trans,  # source and target are reversed to get the correct transform
-                                                            o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+                                                            o3d.pipelines.registration.TransformationEstimationPointToPlane(
+                                                                # o3d.pipelines.registration.RobustKernel(
+                                                                    # o3d.pipelines.registration.TukeyLoss, 0.1)
+                                                            ),
                                                             o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iteration)
     )
 
@@ -219,42 +222,45 @@ def estimate_p2pl_spin_init(source, target, threshold=0.5, return_info=False, ma
 
 
 def save_processed_data(SLAM, **kwargs):
+    print('saving data...')
     temp_cwd = os.getcwd()
 
     folders = listdirs(PATH_TO_PROCESSED)
-    n = int(folders[-1].split('_')[-1]) +1
+    n = 0 if len(folders) == 0 else int(folders[-1].split('_')[-1]) +1
     proc_data_folder = f"{SEQUENCE_NAME}_run_{(n):03d}"
     folder_path = f'{PATH_TO_PROCESSED}/{proc_data_folder}'
     os.mkdir(folder_path)
     os.chdir(folder_path) 
-
+    saved_str = 'saved!'
     for key,value in kwargs.items():
-        if isinstance(value, np.ndarray):
-            fmt = '%.6e'
-            if key == 'timestamps':
-                fmt = '%.32e'
-            np.save(key, value)
-            np.savetxt(f'{key}.txt', value, fmt=fmt, delimiter=" ")
-        else:
-            try:
+        try:
+            print(f'Saving {key:25}',end='')
+            if isinstance(value, np.ndarray):
+                fmt = '%.6e'
+                if 'time' in key:
+                    fmt = '%.32e'
+                np.save(key, value)
+                np.savetxt(f'{key}.txt', value, fmt=fmt, delimiter=" ")
+            else:
                 o3d.io.write_point_cloud(key + ".pcd", value)
-            except:
-                print("Can't save {} because it is neither a np.array or pcd".format(key))
+            print(f'{saved_str}', end='\n')
+        except:
+            e = f"Can't save {key} because it is neither a np.array or pcd"
+            print(f'{e}')
 
     #pickle settings
 
     with open('settings.pickle', 'wb') as handle:
         pickle.dump(SETTINGS, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # with open('pose_graph.pickle', 'wb') as handle:
-    #     pickle.dump(SLAM.keyframes, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
     # create list of strings
     with open("settings.txt", 'w') as f: 
         for key, value in SETTINGS_DICT.items(): 
             f.write(f'{key:25}{value}\n')
 
-    print(f"Data saved in {folder_path}")
+    print('Settings saved and pickled')
+
+    print(f"Data saved in: {folder_path}")
 
     # create a .txt with description!!
 
@@ -315,7 +321,7 @@ def crop_pcd(pcd, x=None,y=None,z=None, r=None):
     mask_x = np.atleast_2d(np.logical_and(points[:,0] > x[0], points[:,0] < x[1])).T if not(x is None) else np.full((len(points),1), True)
     mask_y = np.atleast_2d(np.logical_and(points[:,1] > y[0], points[:,1] < y[1])).T if not(y is None) else np.full((len(points),1), True)
     mask_z = np.atleast_2d(np.logical_and(points[:,2] > z[0], points[:,2] < z[1])).T if not(z is None) else np.full((len(points),1), True)
-    mask_r = np.atleast_2d(np.logical_and(np.linalg.norm(points[:,:2], axis=1) > r[0], np.linalg.norm(points[:,:2], axis=1) < r_[1])).T if not(r is None) else np.full((len(points),1), True)
+    mask_r = np.atleast_2d(np.logical_and(np.linalg.norm(points[:,:2], axis=1) > r[0], np.linalg.norm(points[:,:2], axis=1) < r[1])).T if not(r is None) else np.full((len(points),1), True)
 
     # m1 = np.logical_and(mask_x , mask_y)
     # m2 = np.logical_and(mask_z , mask_r)

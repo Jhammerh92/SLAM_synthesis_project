@@ -10,6 +10,7 @@ import time
 import progress_bar
 import colorsys
 # import threading
+import pandas as pd
 
 # from filterpy.kalman import KalmanFilter
 # from filterpy.common import Q_discrete_white_noise
@@ -253,7 +254,8 @@ class Loop_Closure(object):
 
 
 class PG_SLAM(object):
-    def __init__(self, bias_correction, **params):#calib_lidar_pose=None, undistort_pcd=False, cam_follow=True, use_loop_closure=True):
+    def __init__(self, bias_correction, **params):    #calib_lidar_pose=None, undistort_pcd=False, cam_follow=True, use_loop_closure=True):
+        self.finish = False
         self.pose_graph = o3d.pipelines.registration.PoseGraph() # it has the pose graph
         self.cycle = 0
         self.last_vis_update = 0
@@ -292,6 +294,15 @@ class PG_SLAM(object):
         r = Rotation.from_matrix(self.lidar_pose[:3,:3])
         self.euler_ang_lidar = r.as_euler('xyz', degrees=True)
         print(f'Eulers angles of lidar "XYZ": {self.euler_ang_lidar}')
+
+
+
+        self.process_times = []
+        self.icp_times = []
+        self.fitnesses = []
+        self.inlier_rmses = []
+        self.proximites_count = 0
+
 
 
         self.recent_proximity_ids = []
@@ -341,7 +352,7 @@ class PG_SLAM(object):
         self.pcd2 = copy.deepcopy(point_pcd)
         self.vis_loop.add_geometry(self.pcd1)
         self.vis_loop.add_geometry(self.pcd2)
-        self.vis_loop.update_renderer()
+        # self.vis_loop.update_renderer()
 
         # vis for current pcd
         self.vis_pcd = o3d.visualization.Visualizer()
@@ -351,13 +362,27 @@ class PG_SLAM(object):
         self.vis_pcd.add_geometry(self.pcd_vis)
 
 
+
+        # visulazier for loop ICP
+        self.vis_ICP = o3d.visualization.Visualizer()
+        self.vis_ICP.create_window()
+        self.vis_ICP.get_render_option().load_from_json(path_to_cwd + 'render_options_vis.json')
+        point = np.random.normal(0.0,20.0,(100,3))
+        point_pcd = o3d.geometry.PointCloud()
+        point_pcd.points = o3d.utility.Vector3dVector(point)
+        self.pcd_source = copy.deepcopy(point_pcd)
+        self.pcd_target = copy.deepcopy(point_pcd)
+        self.vis_ICP.add_geometry(self.pcd_source)
+        self.vis_ICP.add_geometry(self.pcd_target)
+        # self.vis_ICP.update_renderer()
+
+
         # visualizer for SLAM
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window()
         self.vis.get_render_option().load_from_json(path_to_cwd + 'render_options_vis.json')
         load_view_point(path_to_cwd + 'viewpoint.json', self.vis) 
         add_geometry(self.vis, self.Loop_Closure.lineset)
-
 
         # make also a updating pyplot of the odometry and the keyframe positions
 
@@ -376,6 +401,7 @@ class PG_SLAM(object):
         # self.kalman_filter.R = np.eye(6)*1.5
         # self.kalman_filter.Q = np.eye(6)*1.5
         # print(self.kalman_filter.Q)
+        print('\n\n\n')
 
 
 
@@ -441,6 +467,9 @@ class PG_SLAM(object):
         pcd.transform(self.lidar_pose)
         pcd_ds.transform(self.lidar_pose)
 
+        pcd = crop_pcd(pcd, z=(-2.5,100), r=(2, 500))
+        pcd_ds = crop_pcd(pcd_ds, z=(-2.5,100), r=(2, 500))
+
 
         self.pcd = pcd
         self.pcd_kf = pcd_ds if downsample_keyframes  else pcd # keyframes are never downsampled if the others are not
@@ -485,15 +514,56 @@ class PG_SLAM(object):
 
         
 
-        self.vis.poll_events()
+        # self.vis.poll_events()
+        # self.vis.update_renderer()
+        # self.vis_loop.poll_events()
+        # self.vis_loop.update_renderer()
+        # self.vis_pcd.poll_events()
+        # self.vis_pcd.update_renderer()
+        # self.vis_ICP.poll_events()
+        # self.vis_ICP.update_renderer()
+
+        # laves til en seperat funktion der loop over vizulizer i en list? stor implementation!
+        finish = False
+        if not self.vis.poll_events():
+            finish = True
         self.vis.update_renderer()
-        self.vis_loop.poll_events()
+        if not self.vis_loop.poll_events():
+            finish = True
         self.vis_loop.update_renderer()
-        self.vis_pcd.poll_events()
+        if not self.vis_pcd.poll_events():
+            finish = True
         self.vis_pcd.update_renderer()
+        if not self.vis_ICP.poll_events():
+            finish = True
+        self.vis_ICP.update_renderer()
+        
+        self.finish = finish
+
+        # lock process at a frame x
+        # x = 10
+        # while self.cycle <= x:
+        #     if not self.vis.poll_events():
+        #         break
+        #     self.vis.update_renderer()
+        #     if not self.vis_loop.poll_events():
+        #         break
+        #     self.vis_loop.update_renderer()
+        #     if not self.vis_pcd.poll_events():
+        #         break
+        #     self.vis_pcd.update_renderer()
+        #     if not self.vis_ICP.poll_events():
+        #         break
+        #     self.vis_ICP.update_renderer()
 
         t2_process = time.perf_counter()
-        print(f"process time:\t {t2_process - t1_process:2f}s")
+        process_time = t2_process - t1_process
+        # print(f"process time:\t {process_time:2f}s")
+        self.process_times.append(process_time)
+
+        self.print_iteration_info()
+
+        return self.finish
 
     
 
@@ -519,8 +589,23 @@ class PG_SLAM(object):
         # draw_registration_result(source, traget , self.last_transform)
         t1_icp = time.perf_counter()
         reg, reg_information, evaluation = estimate_p2pl(source, target, init_trans=self.last_transform_guess, return_info=True, use_coarse_estimate=True, threshold=self.ICP_treshold)
+        t2_icp = time.perf_counter()
+        icp_time = t2_icp - t1_icp
+        # print(f"ICP time:\t {icp_time:2f}s")
+        self.icp_times.append(icp_time)
         transformation = copy.deepcopy(reg.transformation) # @ self.pitch_rot_bias
-        transformation[3,:3] = self.translation_bias
+        # transformation[3,:3] = self.translation_bias
+
+        self.pcd_source.points = source.transform(transformation).points
+        self.pcd_target.points = target.points
+        # self.vis_loop.visible = True
+        self.vis_ICP.update_geometry(self.pcd_source.paint_uniform_color([1.0,0.0,0.0]))
+        self.vis_ICP.update_geometry(self.pcd_target.paint_uniform_color([0.0,0.0,1.0]))
+        
+
+
+        self.fitnesses.append(reg.fitness)
+        self.inlier_rmses.append(evaluation.inlier_rmse)
         # transformation_lidar = np.linalg.inv(self.lidar_pose) @ transformation @ (self.lidar_pose)
         # print(f"world transformation \n{transformation}")
         # print(f"Lidar transformation \n{transformation_lidar}")
@@ -528,8 +613,6 @@ class PG_SLAM(object):
         # print(f"Lidar transformation \n{transformation}")
 
         # transformation, reg_information, evaluation = ground_plane_constrained_ICP(source, target, init_trans=self.last_transform_guess, return_info=True, threshold=self.ICP_treshold)
-        t2_icp = time.perf_counter()
-        print(f"ICP time:\t {t2_icp - t1_icp}")
 
         # evaluation = o3d.pipelines.registration.evaluate_registration(source, target, self.ICP_treshold, reg.transformation )
         # transformation =  (self.lidar_pose) @ transformation @ np.linalg.inv(self.lidar_pose) # not
@@ -562,7 +645,7 @@ class PG_SLAM(object):
         #     odometry = self.keyframes[-1].pose @ transformation
     
         self.last_transform = transformation  # remember transform to use as guess, adding the last_odometry transform improves process time, also helps in case of bad registrations
-        self.last_transform_guess = transformation @ self.last_odometry_transform
+        self.last_transform_guess = transformation @ self.last_odometry_transform # the initial guess
 
         self.last_odometry = odometry
 
@@ -590,7 +673,7 @@ class PG_SLAM(object):
         self.last_transform_guess = self.last_odometry_transform # should improve itertation times by using the last movement as the next guess
         self.last_transform = np.eye(4)
 
-        print("keyframe added")
+        # print("keyframe added")
         return True  # as the keyframe was updated.
 
 
@@ -598,13 +681,13 @@ class PG_SLAM(object):
 
         self.recent_proximity_ids.append(set(self.proximity_idx))
         
-        print(self.recent_proximity_ids[-look_back:])
+        # print(self.recent_proximity_ids[-look_back:])
         if len(self.recent_proximity_ids[-look_back:]) > 0:
             recents = []
             for s in self.recent_proximity_ids[-look_back:]:
                 recents = recents + list(s)
             repeated_prox = Counter(recents).most_common()
-            print(repeated_prox)
+            # print(repeated_prox)
             if len(repeated_prox) == 0:
                 return False
             self.proximity_idx = []
@@ -614,8 +697,8 @@ class PG_SLAM(object):
 
             self.look_back_idx = self.keyframes[-1].id - look_back// 2  # get the center id of the look_back range
             self.closest_idx = self.recent_proximity_ids[self.look_back_idx].intersection(set(self.proximity_idx))
-            print(self.closest_idx)
-            print(self.proximity_idx)
+            # print(self.closest_idx)
+            # print(self.proximity_idx)
             if len(self.closest_idx) > 0: #
                 self.proximity_idx = np.asarray(list(self.closest_idx))
                 return True
@@ -633,10 +716,11 @@ class PG_SLAM(object):
         distances = calculate_internal_distances(np.asarray(positions), xy_only=True) # could be vectorized
         proximity_idx = np.where(distances[-1,:] < dist**2)[0] # index of keyframes within dist meters i.e. r**2
         # proximity_idx_mask = proximity_idx < (self.cycle - 100) # the 100 latest frames are blocked from loop completion
-        proximity_idx_mask = proximity_idx < (len(self.keyframes) - 25) # the 10 latest keyframesframes are blocked from loop completion
+        proximity_idx_mask = proximity_idx < (len(self.keyframes) - 25) # the 25 latest keyframesframes are blocked from loop completion
         # closest_mask = distances[-1, proximity_idx_mask ] == np.min(distances[-1, proximity_idx[proximity_idx_mask ]])
         self.proximity_idx = proximity_idx[proximity_idx_mask ]
-        print(f"loop closure proximities detected: {len(self.proximity_idx)}")
+        # print(f"loop closure proximities detected: {len(self.proximity_idx)}")
+        self.proximites_count = len(self.proximity_idx)
 
         # if not any(proximity_idx_mask): # there are no proximities to earlier positions
             # t2_loop = time.perf_counter()    
@@ -703,6 +787,7 @@ class PG_SLAM(object):
             reg_prox, reg_information, evaluation = estimate_p2pl(current_pcd, closure_pcd, init_trans=init_trans, return_info=True, use_coarse_estimate=True)
             # reg_prox, reg_information = estimate_p2pl_spin_init(closure_pcd, current_pcd, return_info=True, max_iteration=100)
             transformation_prox = reg_prox.transformation 
+            closure_distance = translation_dist_of_transform(transformation_prox)
             # transformation_prox = np.linalg.inv(self.lidar_pose) @ reg_prox.transformation @ self.lidar_pose
             # print(transformation_prox)
 
@@ -714,6 +799,7 @@ class PG_SLAM(object):
             registrations.append({"id":closure_keyframe.id,
                                   "frame_idx":closure_keyframe.frame_idx,
                                   "fitness":reg_prox.fitness, 
+                                  'closure_distance': closure_distance,
                                   "inlier_rmse": evaluation.inlier_rmse, 
                                   "transformation":transformation_prox, 
                                   "information":reg_information,
@@ -723,7 +809,7 @@ class PG_SLAM(object):
 
         fitnesses = np.asarray(fitnesses)
         inlier_rmses = np.asarray(inlier_rmses)
-        print(fitnesses , inlier_rmses, sep="\n")
+        # print(fitnesses , inlier_rmses, sep="\n")
 
         # if np.argmin(inlier_rmses) != np.argmax(fitnesses):
         #     t2_loop = time.perf_counter()    
@@ -734,10 +820,12 @@ class PG_SLAM(object):
         best_registration = registrations[np.argmax(fitnesses)]
 
 
-
         # if best_registration['fitness'] > 0.5: 
-        print(f"Best inlier_rmse:\t{best_registration['inlier_rmse']}")
-        print(f"Best fitness:\t{best_registration['fitness']}")
+        print(f"\x1B[2A\rBest inlier_rmse:\t{best_registration['inlier_rmse']:.4f}")
+        print(f"Best fitness:\t{best_registration['fitness']:.4f}")
+
+        is_valid = best_registration['inlier_rmse'] < 1 * self.ICP_treshold and best_registration['fitness'] > 0.5 and best_registration['closure_distance'] <= 10.0
+
         self.pcd1.points = current_pcd.transform(best_registration['transformation']).points
         self.pcd2.points = best_registration['pcd'].points
         # self.vis_loop.visible = True
@@ -745,7 +833,7 @@ class PG_SLAM(object):
         self.vis_loop.update_geometry(self.pcd2.paint_uniform_color([0.0,0.0,1.0]))
         self.vis_loop.poll_events()
         self.vis_loop.update_renderer()
-        if best_registration['inlier_rmse'] < 1 * self.ICP_treshold and best_registration['fitness'] > 0.3 :# and best_registration['fitness'] > 0.3: # reject loop closure if bad inlier RMSE, more strict than normal
+        if is_valid:
             keep_closure = False
             if best_registration['fitness'] > 0.4: # automatically added
                 keep_closure = True
@@ -766,7 +854,7 @@ class PG_SLAM(object):
 
             if keep_closure:
                 closure_added = True
-                print(f"loop closure added with transformation:\n{best_registration['transformation']}")
+                # print(f"loop closure added with transformation:\n{best_registration['transformation']}")
                 self.pose_graph.edges.append(o3d.pipelines.registration.PoseGraphEdge(  current_keyframe.frame_idx,
                                                                                         best_registration["frame_idx"],
                                                                                         best_registration["transformation"],
@@ -807,19 +895,20 @@ class PG_SLAM(object):
             # self.repeated_proximity_detection()
             self.confirm_loop_closure_candidates(idx=-1)
         self.optimize()
-        self.update_visual()
+        self.update_visual(full=True)
+        print('\x1B[2B')
 
-    def update_visual(self):
+    def update_visual(self, full=False):
         print("Updating visuals...")
         n_keyframes = len(self.keyframes)
         for i, (keyframe) in enumerate(self.keyframes):
             progress_bar.progress_bar(i, n_keyframes)
 
-            keyframe.update_slam_transform(self.pose_graph.nodes[keyframe.frame_idx].pose)
+            keyframe.update_slam_transform(self.pose_graph.nodes[keyframe.frame_idx].pose, full=full)
 
             self.vis.update_geometry(keyframe.slam_transformed_pcd)
             self.vis.update_geometry(keyframe.orientation_LineSet)
-
+            
             self.vis.poll_events()
             self.vis.update_renderer()
 
@@ -870,15 +959,34 @@ class PG_SLAM(object):
             
 
 
-    def generate_map(self):
+    def generate_map(self, full=True):
         print("generating map...")
         pcd_combined = o3d.geometry.PointCloud()
         for i, keyframe in enumerate(self.keyframes):
             progress_bar.progress_bar(i, len(self.keyframes))
-            keyframe.update_slam_transform(self.pose_graph.nodes[keyframe.frame_idx].pose, full=True)
+            # keyframe.update_slam_transform(self.pose_graph.nodes[keyframe.frame_idx].pose, full=full)
+            pcd = keyframe.slam_transformed_pcd_full if full else keyframe.slam_transformed_pcd
             pcd_combined += keyframe.slam_transformed_pcd_full
         # pcd_combined = o3d.voxel_down_sample(pcd_combined, 0.2)
         return pcd_combined
+
+
+    def print_iteration_info(self):
+        self.Odometry.positions[-1][0]
+        print_info = {
+            'cycle': self.cycle,
+            'keyframes': len(self.keyframes),
+            ' ' *5+'velocity': translation_dist_of_transform(self.last_odometry_transform, timestep=self.delta_time),
+            ' '*10+'x': self.Odometry.positions[-1][0], 
+            ' '*10+'y': self.Odometry.positions[-1][1], 
+            ' '*10+'z': self.Odometry.positions[-1][2], 
+            'ICP time': self.icp_times[-1],   
+            'process time': self.process_times[-1], 
+            'loop closure prox.': self.proximites_count
+        }
+        # self.proximites_count = 0
+        print_dataframe = pd.DataFrame(print_info, index=[0])
+        print(print_dataframe, end='\x1B[1A\r')
 
 
     def plot_pose_graph(self, ax=None):
@@ -917,8 +1025,20 @@ class PG_SLAM(object):
         poses = np.asarray(poses)
         return poses
 
+    def get_fitnesses(self):
+        return np.asarray(self.fitnesses)
+
+    def get_inlier_rmses(self):
+        return np.asarray(self.inlier_rmses)
+
     def get_timestamps(self):
         return np.asarray(self.timestamps)
+
+    def get_process_times(self):
+        return np.asarray(self.process_times)
+
+    def get_icp_times(self):
+        return np.asarray(self.icp_times)
 
     def plot_odometry(self, ax=None):
         pos = self.get_odometry() #np.asarray(self.Odometry.positions)

@@ -31,13 +31,14 @@ _pool_ = concurrent.futures.ThreadPoolExecutor()
 
 class PCDloader:
     
-    def __init__(self, path, start_idx = 0, end_idx = None, voxel_size=0.5):
+    def __init__(self, path, start_idx = 0, end_idx = None, voxel_size=0.5, repeat=False):
         self.start_idx = start_idx
         self.cycle = start_idx
         if path[-1] != '/':
             path += '/'
         self.path = path
         self.voxel_size = voxel_size
+        self.repeat = repeat
 
         self.pcd_ls = [file for file in os.listdir(self.path) if file.endswith('.pcd')]
         # sort by 6 cifre zero padded index i.e. 000001, split by _ or .
@@ -59,6 +60,8 @@ class PCDloader:
             current, current_ds, ts = self.retrieve_next()
 
             self.cycle += 1
+            if self.cycle > self.end_idx and self.repeat:
+                self.cycle = self.start_idx
             # t2_load = time.perf_counter()
             try:
                 self.load_next()
@@ -81,6 +84,9 @@ class PCDloader:
     def retrieve_next(self):
         result1,results2, timestamp = self.next.result()
         return result1.create_pointcloud(), results2.create_pointcloud(), timestamp
+
+    def shutdown(self):
+        _pool_.shutdown()
 
 
 
