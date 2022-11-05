@@ -275,7 +275,8 @@ def calc_motion_parameters(odometry):
 def calc_relative_error(odometry, R, odometry_truth, R_truth, dist=[10]):
     if not isinstance(dist, list):
         dist = [dist]
-    delta_R = calc_delta_R(R, R_truth)
+    # delta_R = calc_delta_R(R, R_truth)
+    delta_R = R_truth.transpose((0,2,1)) @ R
     cum_length = calc_motion_parameters(odometry)[0]
     RE = dict(delta_p=[], delta_phi=[], segment_length=[])
     for d in dist:
@@ -298,7 +299,8 @@ def calc_relative_error(odometry, R, odometry_truth, R_truth, dist=[10]):
             R_p = delta_R[_s] # should be R0 R^0^T
             t_p = np.array( d_truth[0] - delta_R[_s]@d_[0],ndmin=2).T
             aligned_d = align_odometry(np.asarray(d_), s_p=1, R_p=R_p, t_p=t_p)
-            test = aligned_d - d_truth
+            aligned_d = aligned_d - d_truth[0]
+            d_truth = d_truth - d_truth[0]
 
             # this is what the paper says            
             # d_phi = np.linalg.norm(Rotation.from_matrix(delta_R[_e]).as_rotvec(degrees=True))
@@ -309,14 +311,16 @@ def calc_relative_error(odometry, R, odometry_truth, R_truth, dist=[10]):
             # R_d_truth = calc_delta_R(R_truth[_s], R_truth[_e])
             # d_R_k = R_d.T @ R_d_truth
 
-            d_R_k = calc_delta_R((R[_s].T @ R[_e]) , R_truth[_s].T @ R_truth[_e])
             # d_R_k = (R[_s].T @ R[_e]).T @ R_truth[_s].T @ R_truth[_e]
+
+            # d_R_k = calc_delta_R((R[_s].T @ R[_e]) , R_truth[_s].T @ R_truth[_e]) # difference between the rot change in GT vs that in estimated
+            d_R_k = (R[_s].T @ R[_e]).T @ (R_truth[_s].T @ R_truth[_e]) # difference between the rot change in GT vs that in estimated
             d_phi = np.linalg.norm(Rotation.from_matrix(d_R_k).as_rotvec(degrees=True))
             error_aligned_d = (d_R_k @ np.array(aligned_d).T).T
 
             # error_aligned_d = d_R_k@aligned_d
             # error_aligned_d = (delta_R[_e] @ np.array(aligned_d).T).T 
-            error_aligned_d = error_aligned_d - (error_aligned_d[0,:] - d_truth[0] )
+            # error_aligned_d = error_aligned_d - (error_aligned_d[0,:] - d_truth[0] )
             d_p = np.linalg.norm(d_truth[1] - error_aligned_d[1,:])
 
 
@@ -354,6 +358,8 @@ def plot_relative_error(RE, odometry):
     ax2.set_ylabel('Relative rotational error [deg]')
     ax2.set_xlabel('Travelled Distance [m]')
 
+    fig1.suptitle(f"Relative Error of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")
+
     fig2, (ax1, ax2) = plt.subplots(2, 1,constrained_layout=True,sharex=True)
     for i, d in enumerate(RE['segment_length']):
         ax1.scatter(np.random.normal(i+1,0.05,len(RE['delta_p'][i])), RE['delta_p'][i],marker='.', s=0.5,c='C0', alpha=0.5)
@@ -369,13 +375,17 @@ def plot_relative_error(RE, odometry):
     ax2.set_xticklabels(RE['segment_length'])
     ax2.set_xlabel('Segment Distance [m]')
 
-    fig2.suptitle(f"Relative Error of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")
+    fig2.suptitle(f"Relative Error Box Plots of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")
     #plot statistical  box-plot ish
     # odometry colored with the error to see where the error low and high
 
     fig3, (ax1, ax2) = plt.subplots(1, 2 , constrained_layout=True)
-    plotting.plot_odometry_colorbar_2D(odometry, c_values= RE['delta_p'][0], fig=fig3, ax=ax1, cmap='plasma')
-    plotting.plot_odometry_colorbar_2D(odometry, c_values= RE['delta_phi'][0], fig=fig3, ax=ax2, cmap='plasma')
+    plotting.plot_odometry_colorbar_2D(odometry, c_values= RE['delta_p'][0], fig=fig3, ax=ax1, cmap='plasma', plane='xz')
+    plotting.plot_odometry_colorbar_2D(odometry, c_values= RE['delta_phi'][0], fig=fig3, ax=ax2, cmap='plasma', plane='xz')
+    ax1.set_title('Translation Relative Error')
+    ax2.set_title('Rotational Relative Error')
+
+    fig3.suptitle(f"Relative Error Color Map of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")
     
     
     return
@@ -500,9 +510,9 @@ def dataframe_to_latex(df, **kwargs):
 
 
 if __name__ == "__main__":
-    plt.rcParams["figure.figsize"] = (12,10)
+    plt.rcParams["figure.figsize"] = (10,7)
     print('\n\n\n-------------START--------------')
-    RUNS = [2]
+    RUNS = [-1]
     #fig2.suptitle(f"Relative Error of {DATA_SET_LABEL}, Loop Closure: {settings['value']['use loop closure']}")   
     types = ['LC', 'LM-ICP', 'Raw']
     aligned = [True, False, False]
@@ -562,8 +572,8 @@ if __name__ == "__main__":
         except:
             pass
         try:
-            ax_ICP.plot(icp_times, color=f'C{r}',lw=lw)
-            ax_ICP.plot(process_times, color=f'C{r}',lw=lw)
+            ax_ICP.plot(icp_times, color=f'C{r}',lw=lw, label='ICP time', ls='--')
+            ax_ICP.plot(process_times, color=f'C{r}',lw=lw, label='Total Process Time')
         except:
             pass
             # print('no fitness or rmse recorded')
@@ -595,7 +605,7 @@ if __name__ == "__main__":
     ax_inlier.legend(types)
 
     fig_ICP.suptitle(f"ICP times, {settings['value']['label']}")
-    ax_ICP.legend(types)
+    ax_ICP.legend()
 
 
     plt.show()

@@ -2,3 +2,6 @@
 slam-synthesis/
 math_test_box.py
 .vscode
+env_slam/
+test_data/
+__pycache__/

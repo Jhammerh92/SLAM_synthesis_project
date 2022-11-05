@@ -3,6 +3,7 @@ import sys
 from numpy import loadtxt, eye
 from settings import *
 import pandas as pd
+import numpy as np
 
 # read path to data from the .txt file
 def get_paths_from_txt(txt_with_paths):
@@ -75,7 +76,11 @@ try:
     CALIB_LIDAR_POSE = loadtxt(f'{path_to_sequences}/calibrated_lidar_pose.txt') # should be loaded with the data set...
     CALIB_BOOL = True
 except:
-    CALIB_LIDAR_POSE = eye(4) # if no calibrationa exists
+    kitti_rot_mat = np.array([7.533745e-03, -9.999714e-01, -6.166020e-04, 1.480249e-02, 7.280733e-04, -9.998902e-01, 9.998621e-01, 7.523790e-03, 1.480755e-02]).reshape((3,3))
+    # kitti_rot_mat = np.array([[0,-1,0],[0,0,-1],[1,0,0]])
+    kitti_trans_matrix = np.c_[kitti_rot_mat, np.zeros((3,1))]
+    kitti_trans_matrix = np.r_[kitti_trans_matrix, np.array([[0.0,0.0,0.0,1.0]])]
+    CALIB_LIDAR_POSE = kitti_trans_matrix # if no calibrationa exists
     CALIB_BOOL = False
 
 TOTAL_PCDS = len([file for file in os.listdir(PATH_TO_PCDS) if file.endswith('.pcd')])

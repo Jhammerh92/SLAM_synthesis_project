@@ -13,7 +13,7 @@ from functions import *
 from load_paths import * # loads paths to data
 from slam import *
 
-# import plotting
+import plotting
 
 import thread_pool_loader as tpl
 
@@ -39,7 +39,7 @@ def main():
         "yaw":   0.0,
     }
 
-    # ground_truth_odometry,_ = plotting.get_pose_ground_truth_KITTI(path_to_pose_txt)
+    #ground_truth_poses = plotting.get_pose_ground_truth_KITTI(path_to_pose_txt, full_pose=True)
     print(SETTINGS)
 
     SLAM = PG_SLAM(bias_correction,**slam_params)# CALIB_LIDAR_POSE, undistort_pcd=UNDISTORT_PCD, cam_follow=CAM_FOLLOW, use_loop_closure=USE_LOOP_CLOSURE)
@@ -54,8 +54,11 @@ def main():
     t_start = time.perf_counter()
     for i, pcds in enumerate(PCDLoader.iterative_loader()): # returns both full and downsampled pcd in 'pcds'
         # if i == 1557-1300:
+        
         #     print('FAULT if these been a loop closure added before this point')
-        if SLAM.update(*pcds, gps_position=None, use_downsampled=True, downsample_keyframes=True):
+        # gps_pose = ground_truth_poses[i]
+        gps_pose = None
+        if SLAM.update(*pcds, gps_pose=None, use_downsampled=DOWNSAMPLE_REST, downsample_keyframes=DOWNSAMPLE_KEYFRAMES):
             PCDLoader.shutdown()
             break
     
@@ -79,23 +82,23 @@ def main():
     # local_map = SLAM.generate_local_map(5)
     # draw_pcd(local_map)
 
-    slam_map = SLAM.generate_map()
+    #slam_map = SLAM.generate_map()
 
     # put into a SLAM.get_data() + SLAM.save_data()
-    loam_data = {
-                    "odometry": SLAM.get_odometry(),
-                    "non_opt_odometry":SLAM.get_odometry_non_opt(),
-                    "poses": SLAM.get_poses(),
-                    "keyframe_poses": SLAM.get_keyframe_poses(),
-                    'timestamps': SLAM.get_timestamps(),
-                    "process_times": SLAM.get_process_times(),
-                    "icp_times": SLAM.get_icp_times(),
-                    "fitnesses": SLAM.get_fitnesses(),
-                    "inlier_rmses": SLAM.get_inlier_rmses(),
-                    "SLAM_map": slam_map
-                  }
+    # loam_data = {
+    #                "odometry": SLAM.get_odometry(),
+    #                "non_opt_odometry":SLAM.get_odometry_non_opt(),
+    #                "poses": SLAM.get_poses(),
+    #                "keyframe_poses": SLAM.get_keyframe_poses(),
+    #                'timestamps': SLAM.get_timestamps(),
+    #                "process_times": SLAM.get_process_times(),
+    #                "icp_times": SLAM.get_icp_times(),
+    #                "fitnesses": SLAM.get_fitnesses(),
+    #                "inlier_rmses": SLAM.get_inlier_rmses(),
+    #                "SLAM_map": slam_map
+    #              }
 
-    save_processed_data(SLAM,**loam_data)
+    #save_processed_data(SLAM,**loam_data)
 
     
 

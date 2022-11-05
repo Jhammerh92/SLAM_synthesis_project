@@ -1,2 +1,3 @@
 /Volumes/HAMMER DATA 2TB/DTU_LIDAR_20220523
 /Volumes/HAMMER DATA 2TB/KITTI_LiDAR
+/Users/jhh/Library/Mobile Documents/com~apple~CloudDocs/DTU/10Semester/Syntese/SLAM_synthesis_project/test_data

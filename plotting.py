@@ -10,24 +10,36 @@ import sys
 from load_paths import *
 
 # to plot KITTI pose data
-def get_pose_ground_truth_KITTI(file_path):
+def get_pose_ground_truth_KITTI(file_path,full_pose=False):
     pose_data_file = open(file_path,'r')
     pose_data = pose_data_file.readlines()
     position = []
     orientation = []
+    poses = []
     # kitti_rot_mat = np.array([7.533745e-03, -9.999714e-01, -6.166020e-04, 1.480249e-02, 7.280733e-04, -9.998902e-01, 9.998621e-01, 7.523790e-03, 1.480755e-02]).reshape((3,3))
-    kitti_rot_mat = np.array([[0,-1,0],[0,0,-1],[1,0,0]])
+    kitti_rot_mat = np.array([[0,-1,0],[0,0,-1],[1,0,0]]).T
+    # kitti_trans_matrix = np.c_[kitti_rot_mat, np.zeros((3,1))]
+    # kitti_trans_matrix = np.r_[kitti_trans_matrix, np.array([[0.0,0.0,0.0,1.0]])]
+
     # print(kitti_rot_mat)
     # print(test)
+    R = Rotation.from_rotvec(np.array([[1.0,0.0,0.0]])*(-np.pi/2)).as_matrix()
+    R = Rotation.from_euler('YXZ',[-90.0,90.0,0.0], degrees=True).as_matrix()
 
     for pose in pose_data:
         pose_matrix = np.array([float(s) for s in  str.split(pose)])
         pose_matrix = pose_matrix.reshape((3,4))
-        pos = pose_matrix[:,3]
+        pose_matrix_homo = np.r_[pose_matrix,np.array([[0.0,0.0,0.0,1.0]])]
+        # pose_matrix_homo[:3,3] = kitti_rot_mat @ pose_matrix_homo[:3,3]
+        # pose_matrix_homo[:3,:3] =  kitti_rot_mat@pose_matrix_homo[:3,:3] 
+        pos = pose_matrix[:3,3]
         orien = pose_matrix[:3,:3] 
-        position.append(kitti_rot_mat.T @ pos)#([pos[2], -pos[0], -pos[1]])
+        position.append(pos)#([pos[2], -pos[0], -pos[1]])
         orientation.append(orien)
+        poses.append(pose_matrix_homo)
     pose_data_file.close()
+    if full_pose:
+        return poses
     return np.asarray(position), np.asarray(orientation)
 
 
@@ -41,6 +53,7 @@ def get_shifted_ground_truth(position, orientation,n, first_index=0,):
     # position = position[::2,:]
     position = position[:n,:]
     return position, orientation
+
 
     
 def get_pose_ground_truth_DTU(file_path, heading_correction=0.0):
@@ -111,7 +124,7 @@ def plot_odometry_2D(pose, axes=None, arg='', label='', **kwargs):
         return fig, axes
 
 
-def plot_odometry_colorbar_2D(odometry, c_values, fig, ax=None, arg='', cmap='summer_r'):
+def plot_odometry_colorbar_2D(odometry, c_values, fig, ax=None, arg='', cmap='summer_r', plane='xy'):
     # 3d plot of egomotion path - OBS. Z and Y axis are switched, but labelled correctly in plot
     c = odometry[:len(c_values), :]
     if arg.lower() == "origo":
@@ -128,6 +141,10 @@ def plot_odometry_colorbar_2D(odometry, c_values, fig, ax=None, arg='', cmap='su
         z = [pt[2] for pt in c]
     c_values = np.asarray(c_values)
 
+    if plane == 'xz':
+        z_temp = z
+        z = y
+        y = z_temp
     # fig = plt.figure()
     # ax = fig.add_subplot(1, 1, 1, projection='3d')
 

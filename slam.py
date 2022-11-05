@@ -41,7 +41,6 @@ from load_paths import * # loads paths to data
 
 
 
-
 class Keyframe(object):
     def __init__(self, id, pcd, pcd_full, odometry, orientation, frame_idx):
         self.id = id                         # the corresponding frame index
@@ -292,8 +291,8 @@ class PG_SLAM(object):
             self.lidar_pose = params['calib_lidar_pose']
 
         r = Rotation.from_matrix(self.lidar_pose[:3,:3])
-        self.euler_ang_lidar = r.as_euler('xyz', degrees=True)
-        print(f'Eulers angles of lidar "XYZ": {self.euler_ang_lidar}')
+        self.euler_ang_lidar = r.as_euler('ZYX', degrees=True)
+        print(f'Eulers angles of lidar "ZYX": {self.euler_ang_lidar}')
 
 
 
@@ -310,6 +309,7 @@ class PG_SLAM(object):
         self.keyframes = [] # an empty list for keyframes
         self.keyframe_table = [] # table to index frame to keyframe id
         self.last_transform = np.eye(4) # the initial pose/transformation
+        self.last_reg_information = np.eye(6)
         self.last_transform_guess = np.eye(4) # the initial pose/transformation "guess"
         self.last_odometry_transform = np.eye(4) # the incremental steps of each frame
         self.previous_odometry_transform = np.eye(4) # the incremental steps of each frame
@@ -453,7 +453,7 @@ class PG_SLAM(object):
 
     
 
-    def update(self, pcd, pcd_ds, timestamp=None, gps_position=None, use_downsampled=True, downsample_keyframes=False):
+    def update(self, pcd, pcd_ds, timestamp=None, gps_pose=None, use_downsampled=True, downsample_keyframes=False):
         t1_process = time.perf_counter()
         self.timestamps.append(timestamp)
         self.update_delta_time()
@@ -467,8 +467,8 @@ class PG_SLAM(object):
         pcd.transform(self.lidar_pose)
         pcd_ds.transform(self.lidar_pose)
 
-        pcd = crop_pcd(pcd, z=(-2.5,100), r=(2, 500))
-        pcd_ds = crop_pcd(pcd_ds, z=(-2.5,100), r=(2, 500))
+        # pcd = crop_pcd(pcd, y=(-100,2.5), r=(2, 500))
+        # pcd_ds = crop_pcd(pcd_ds, y=(-100,2.5), r=(2, 500))
 
 
         self.pcd = pcd
@@ -484,6 +484,8 @@ class PG_SLAM(object):
         self.pcd_vis.normals = self.pcd.normals
         self.vis_pcd.update_geometry(self.pcd_vis)
         
+        
+
         # if it is the first pcd, then create the first keyframe and return
         if len(self.keyframes) == 0:
             
@@ -499,19 +501,39 @@ class PG_SLAM(object):
             return
 
         self.update_delta_time()
+
+        if not (gps_pose is None):
+            self.last_odometry = gps_pose
+            
+            self.push_keyframe()
+            self.last_odometry_transform =  np.linalg.inv(self.Odometry.odometry[-1]) @ self.last_odometry 
+            self.Odometry.push_odometry(self.last_odometry, np.eye(4), init=True)
+
+            # graphics added to open3d
+            add_geometry(self.vis, self.Odometry.LineSet) # white odometry line
+            add_geometry(self.vis, self.Loop_Closure.lineset) # purple lines between loop closure keyframes
+            
+            self.vis.poll_events()
+            self.vis.update_renderer()
+
+            return
+
         
 
         # if a new keyframe was added it continues from here to loop closure and optimizing
         if self.update_keyframe():
             if self.use_loop_closure:
                 self.detect_loop_proximity(dist=50)
+                t2_process = time.perf_counter()
                 # self.repeated_proximity_detection()
-                if self.confirm_loop_closure_candidates(idx = -1, manual=True): # meters distance for loop closure detection
+                if self.confirm_loop_closure_candidates(idx = -1, manual=False): # meters distance for loop closure detection
+                    t2_process = time.perf_counter()
                     if len(self.keyframes) - self.last_vis_update > 40:
                         self.optimize() # run optimize at loop closure
                         self.update_visual() #else update the last n
                         self.last_vis_update = len(self.keyframes)
-
+        else:
+            t2_process = time.perf_counter()
         
 
         # self.vis.poll_events()
@@ -556,7 +578,6 @@ class PG_SLAM(object):
         #         break
         #     self.vis_ICP.update_renderer()
 
-        t2_process = time.perf_counter()
         process_time = t2_process - t1_process
         # print(f"process time:\t {process_time:2f}s")
         self.process_times.append(process_time)
@@ -577,6 +598,8 @@ class PG_SLAM(object):
         #     keyframe_due = True # set to true if you want to force keyframe every n frame
 
         self.cycle += 1
+
+
         source = copy.deepcopy(self.pcd_ds)
         if self.use_local_map_icp:
             target  = self.generate_local_map(self.keyframes[-1].id) # get the previous local map instead of just the last pcd
@@ -631,7 +654,7 @@ class PG_SLAM(object):
         is_valid = (angle_of_transform) < self.keyframe_angle_threshold and translation_of_transform < self.keyframe_translation_threshold
         
         
-        # calculate non-optimised odometry
+        # calculate non-optimised odometry these are not optimized in pose graph
         self.odometry_not_opt = self.keyframes[-1].odometry @ transformation
 
         # calculate optimised odometry
@@ -650,7 +673,7 @@ class PG_SLAM(object):
         self.last_odometry = odometry
 
 
-        # save the odometry poses regardless, and update the 
+        # save the odometry poses regardless, and update the vizualizer
         self.Odometry.push_odometry(self.last_odometry, self.odometry_not_opt) # use self.last_odometry
         self.vis.update_geometry(self.Odometry.LineSet)
 
@@ -713,7 +736,7 @@ class PG_SLAM(object):
        
         # distances = calculate_internal_distances(np.asarray(self.Odometry.positions), xy_only=True) # could be vectorized
         positions = [keyframe.position for keyframe in self.keyframes]
-        distances = calculate_internal_distances(np.asarray(positions), xy_only=True) # could be vectorized
+        distances = calculate_internal_distances(np.asarray(positions), xy_only=False) # could be vectorized
         proximity_idx = np.where(distances[-1,:] < dist**2)[0] # index of keyframes within dist meters i.e. r**2
         # proximity_idx_mask = proximity_idx < (self.cycle - 100) # the 100 latest frames are blocked from loop completion
         proximity_idx_mask = proximity_idx < (len(self.keyframes) - 25) # the 25 latest keyframesframes are blocked from loop completion
@@ -824,7 +847,7 @@ class PG_SLAM(object):
         print(f"\x1B[2A\rBest inlier_rmse:\t{best_registration['inlier_rmse']:.4f}")
         print(f"Best fitness:\t{best_registration['fitness']:.4f}")
 
-        is_valid = best_registration['inlier_rmse'] < 1 * self.ICP_treshold and best_registration['fitness'] > 0.5 and best_registration['closure_distance'] <= 10.0
+        is_valid = best_registration['inlier_rmse'] < 1 * self.ICP_treshold and best_registration['fitness'] > 0.5 and best_registration['closure_distance'] <= 5.0
 
         self.pcd1.points = current_pcd.transform(best_registration['transformation']).points
         self.pcd2.points = best_registration['pcd'].points
